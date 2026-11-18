@@ -1,5 +1,7 @@
 # dtek-outages
 
+[![tests](https://github.com/vapenyk/dtek-outages/actions/workflows/tests.yml/badge.svg)](https://github.com/vapenyk/dtek-outages/actions/workflows/tests.yml)
+
 Unofficial command-line client for the **DTEK Odesa (DTEK-OEM) power outage
 schedules**. Pick a settlement → street → house once, and get the published
 schedule for that address, its outage queue and the current notice.

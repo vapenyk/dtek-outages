@@ -1,5 +1,7 @@
 # dtek-outages
 
+[![tests](https://github.com/vapenyk/dtek-outages/actions/workflows/tests.yml/badge.svg)](https://github.com/vapenyk/dtek-outages/actions/workflows/tests.yml)
+
 Неофіційний консольний клієнт для **графіків відключень ДТЕК Одеса (ДТЕК-ОЕМ)**.
 Обираєте населений пункт → вулицю → будинок і отримуєте опублікований графік
 для своєї адреси, номер черги та поточне повідомлення провайдера.
