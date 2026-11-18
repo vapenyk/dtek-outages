@@ -32,7 +32,9 @@ def main(city: str, street: str, house_number: str) -> int:
                   + ", ".join(h.number for h in houses[:10]), file=sys.stderr)
             return 1
 
+        clock = sch.resolve_clock(page.fact)
         print(f"{city}, {street}, {house.number}: queue {house.queues_text}")
+        print(f"Provider timezone: {clock.name}")
 
         key = sch.today_key(page.fact)
         day = sch.day_data(page.fact, key)

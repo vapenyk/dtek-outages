@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from . import __version__
+from . import schedule as sch
 from .api import DtekClient, DtekError, House
 from .report import json_report, text_report
 from .select import SelectionCancelled, choose
@@ -238,6 +239,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--refresh", action="store_true", help="оновити кеш довідника адрес"
     )
     parser.add_argument(
+        "--timezone",
+        metavar="ZONE",
+        default=None,
+        help=(
+            "часова зона для дат і «зараз»: IANA-назва (Europe/Kyiv), зсув "
+            "(+02:00) або auto. Типово auto — зсув визначається з даних сайту "
+            "(env: DTEK_TIMEZONE)"
+        ),
+    )
+    parser.add_argument(
         "--cache-ttl",
         type=int,
         default=DEFAULT_CACHE_TTL,
@@ -283,6 +294,7 @@ def _run(args: argparse.Namespace) -> int:
 
     house = pick_house(houses, args.house, city, street, not args.no_fzf)
     page = client.open()
+    clock = sch.resolve_clock(page.fact, args.timezone)
 
     if args.json:
         payload: dict[str, Any] = json_report(
@@ -292,6 +304,7 @@ def _run(args: argparse.Namespace) -> int:
             queues=house.queues,
             fact=page.fact,
             preset=page.preset,
+            clock=clock,
         )
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         return 0
@@ -303,6 +316,7 @@ def _run(args: argparse.Namespace) -> int:
         queues=house.queues,
         fact=page.fact,
         preset=page.preset,
+        clock=clock,
         color=_use_color(args),
     )
     print("\n".join(lines))
@@ -315,6 +329,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run(args)
     except SelectionCancelled:
         return 130
+    except sch.ZoneError as exc:
+        print(f"Помилка: {exc}", file=sys.stderr)
+        return 1
     except DtekError as exc:
         print(f"Помилка: {exc}", file=sys.stderr)
         return 1

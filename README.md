@@ -29,7 +29,9 @@ schedule for that address, its outage queue and the current notice.
 * **Copyable API layer**: all network code lives in a single file,
   [`dtek_outages/api.py`](dtek_outages/api.py), with no other imports.
 * **JSON output** for bars, scripts and dashboards.
-* **29 unit tests**, no network needed.
+* **No hardcoded timezone** — the provider's UTC offset is derived from its own
+  day keys, and `--timezone` overrides it.
+* **42 unit tests**, no network needed.
 
 Українська версія: [README.uk.md](README.uk.md).
 
@@ -40,7 +42,7 @@ schedule for that address, its outage queue and the current notice.
 | Python | 3.9 or newer | `python3 --version` |
 | `fzf` | optional | nicer picker; install with your package manager (`brew install fzf`, `pkg install fzf`, `apt install fzf`) |
 | Network | yes | `https://www.dtek-oem.com.ua` |
-| `tzdata` | usually present | used for Kyiv time; falls back to local time |
+| `tzdata` | usually present | needed only for named zones (`--timezone Europe/Kyiv`) |
 
 ## Install
 
@@ -95,6 +97,7 @@ dtek-outages --city "м. Одеса" --street "вул. Дерибасівськ�
 | `--refresh` | ignore the cached street catalogue |
 | `--cache-ttl SECONDS` | how long the catalogue stays fresh (default 86400) |
 | `--timeout SECONDS` | HTTP timeout (default 25) |
+| `--timezone ZONE` | clock for dates and "now": `Europe/Kyiv`, `+02:00`, or `auto` (default; also `DTEK_TIMEZONE`) |
 | `--base-url URL` | another host, useful for tests (`DTEK_BASE`) |
 | `--version` | print the version |
 
@@ -109,8 +112,8 @@ Exit codes: `0` success, `1` error (network, unknown address, no data),
                "label": "м. Одеса, вул. Дерибасівська, 1" },
   "queues": ["GPV3.1"],
   "source": { "updated": "18.11.2026 17:02", "today_key": "1794952800",
-              "timezone": "Europe/Kyiv" },
-  "now": { "kyiv_time": "21:16", "date": "18.11.2026" },
+              "timezone": "UTC+02:00 (auto)" },
+  "now": { "local_time": "21:16", "date": "18.11.2026" },
   "current": { "sub_type": null, "start": null, "end": null },
   "today": {
     "date": "18.11.2026",
@@ -182,10 +185,36 @@ The published schedule is **not** returned by AJAX — it is embedded in the
 page as `DisconSchedule.fact = {...};`, which is why `open()` parses it out of
 the HTML.
 
-`fact` day keys are Unix timestamps of **Kyiv midnight**; hour keys are `"1"`
+`fact` day keys are Unix timestamps of the provider's **local midnight**; hour keys are `"1"`
 … `"24"` (00:00–01:00 … 23:00–24:00), and a missing hour means `yes`, exactly
 as the provider's own page renders it. `preset.time_zone` maps an hour key to
 its display labels (`"8" -> ["07-08", "07:00", "08:00"]`).
+
+## Timezones
+
+The provider publishes each day under a Unix timestamp of its **own local
+midnight**, so the UTC offset is recoverable from the data: a key that lands on
+22:00 UTC means the provider's offset is +02:00. By default (`--timezone auto`)
+the tool derives that offset for every published day and uses it for calendar
+dates and for "now", which makes the report correct on any machine, in any
+timezone, and follows daylight-saving changes day by day. No zone name is
+hardcoded.
+
+Override it when needed:
+
+```bash
+dtek-outages --timezone Europe/Kyiv --city "м. Одеса" --street "" --house 1
+dtek-outages --timezone +03:00 ...      # fixed offset
+DTEK_TIMEZONE=Europe/Kyiv dtek-outages  # same, via the environment
+```
+
+An explicit zone must match the provider's own, otherwise day dates shift.
+When the page carries no schedule at all (for example before the first
+publication), the machine's own zone is used as a last resort. The resolved
+zone is printed in JSON as `source.timezone`, e.g. `UTC+02:00 (auto)`.
+
+Hour labels such as `08:00–11:00` always come from the provider's `preset`
+and are displayed exactly as published.
 
 ## Caching
 
@@ -211,7 +240,9 @@ python3 -m unittest discover -s tests -t .
 
 * Like the provider's page, the tool shows **plans**, not measurements. A
   published `yes` does not prove that power is actually on.
-* Times are Kyiv local time regardless of your machine's timezone.
+* Times are shown as the provider publishes them (Kyiv local in practice);
+  the tool derives that zone itself instead of assuming one — see
+  [Timezones](#timezones).
 * Only the DTEK Odesa region (`dtek-oem.com.ua`) is supported.
 * The site is unofficial and may change its markup or endpoints at any time.
 * Be polite: the tool makes 2–3 requests per run and caches the catalogue.

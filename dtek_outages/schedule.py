@@ -27,11 +27,14 @@ provider's own page renders it.
 from __future__ import annotations
 
 import datetime as dt
+import os
+import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-KYIV_TIMEZONE = "Europe/Kyiv"
+KYIV_TIMEZONE = "Europe/Kyiv"  # convenience default, never assumed anywhere
+DEFAULT_TIMEZONE_ENV = "DTEK_TIMEZONE"
 FIRST_HOUR = 1
 LAST_HOUR = 24
 
@@ -84,56 +87,222 @@ class Interval:
         return self.status != DEFAULT_STATUS
 
 
-def kyiv_tz() -> dt.tzinfo | None:
-    """Return the Kyiv timezone, or ``None`` when tzdata is unavailable."""
+class ZoneError(ValueError):
+    """The timezone is neither a known IANA name nor a valid UTC offset."""
 
+
+class Clock:
+    """The provider's clock: day dates and the current local time.
+
+    Nothing assumes Kyiv. A clock either wraps an explicit timezone (an IANA
+    name or a fixed offset) or works in *detected* mode, where the offset is
+    inferred from the provider's own day keys: every key is local midnight, so
+    its UTC time of day reveals the offset the provider published in.  That
+    keeps dates and "now" correct for a user in any timezone, and follows
+    daylight-saving shifts as long as the provider sends a key per day.
+    """
+
+    def __init__(
+        self,
+        name: str,
+        tz: dt.tzinfo | None = None,
+        offsets: Mapping[int, dt.timedelta] | None = None,
+    ) -> None:
+        self.name = name
+        self.tz = tz
+        self.offsets: dict[int, dt.timedelta] = dict(offsets or {})
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"Clock({self.name!r})"
+
+    def __str__(self) -> str:
+        return self.name
+
+    def offset_for(self, timestamp: int | float) -> dt.timedelta:
+        """UTC offset the provider used for the day containing ``timestamp``."""
+
+        stamp = int(timestamp)
+        if self.tz is not None:
+            offset = dt.datetime.fromtimestamp(stamp, self.tz).utcoffset()
+            return offset or dt.timedelta(0)
+        if not self.offsets:
+            return dt.timedelta(0)
+        if stamp in self.offsets:
+            return self.offsets[stamp]
+        earlier = [key for key in sorted(self.offsets) if key <= stamp]
+        if earlier:
+            return self.offsets[earlier[-1]]
+        return self.offsets[min(self.offsets)]
+
+    def date(self, timestamp: int | str) -> dt.date:
+        """Calendar date of a schedule key, in the provider's timezone."""
+
+        stamp = int(timestamp)
+        zone = dt.timezone(self.offset_for(stamp))
+        return dt.datetime.fromtimestamp(stamp, zone).date()
+
+    def now(self, moment: dt.datetime | None = None) -> dt.datetime:
+        """``moment`` (default: now) expressed in the provider's local time."""
+
+        moment = moment or dt.datetime.now(dt.timezone.utc)
+        if self.tz is not None:
+            return moment.astimezone(self.tz)
+        return moment.astimezone(dt.timezone(self.offset_for(moment.timestamp())))
+
+
+def offset_label(offset: dt.timedelta) -> str:
+    """``timedelta(hours=2)`` -> ``"UTC+02:00"``."""
+
+    total = int(offset.total_seconds())
+    sign = "+" if total >= 0 else "-"
+    hours, minutes = divmod(abs(total) // 60, 60)
+    if not hours and not minutes:
+        return "UTC"
+    return f"UTC{sign}{hours:02d}:{minutes:02d}"
+
+
+_OFFSET_RE = re.compile(r"^(?:UTC|GMT)?([+-])(\d{1,2})(?::?(\d{2}))?$", re.IGNORECASE)
+_MIN_OFFSET = dt.timedelta(hours=-12)
+_MAX_OFFSET = dt.timedelta(hours=14)
+
+
+def parse_zone(name: str) -> dt.tzinfo:
+    """Turn ``"Europe/Kyiv"`` or ``"+03:00"`` into a ``tzinfo``."""
+
+    cleaned = name.strip()
     try:
         from zoneinfo import ZoneInfo
 
-        return ZoneInfo(KYIV_TIMEZONE)
-    except Exception:  # missing tzdata / very old Python
-        return None
+        return ZoneInfo(cleaned)
+    except Exception:
+        pass
+
+    match = _OFFSET_RE.match(cleaned)
+    if match:
+        sign = -1 if match.group(1) == "-" else 1
+        hours = int(match.group(2))
+        minutes = int(match.group(3) or 0)
+        offset = sign * dt.timedelta(hours=hours, minutes=minutes)
+        if minutes < 60 and _MIN_OFFSET <= offset <= _MAX_OFFSET:
+            return dt.timezone(offset)
+
+    raise ZoneError(
+        f"Невідома часова зона «{name}»: вкажіть IANA-назву (Europe/Kyiv) "
+        "або зсув від UTC (+02:00)"
+    )
+
+
+def detect_offsets(
+    fact: Mapping[str, Any], moment: dt.datetime | None = None
+) -> dict[int, dt.timedelta]:
+    """Infer the provider's UTC offsets from its midnight day keys."""
+
+    local = (moment or dt.datetime.now(dt.timezone.utc)).astimezone().utcoffset()
+    local = local or dt.timedelta(0)
+
+    offsets: dict[int, dt.timedelta] = {}
+    for raw in fact.get("data") or {}:
+        try:
+            stamp = int(raw)
+        except (TypeError, ValueError):
+            continue
+        utc = dt.datetime.fromtimestamp(stamp, dt.timezone.utc)
+        seconds = utc.hour * 3600 + utc.minute * 60 + utc.second
+        base = dt.timedelta(seconds=(86400 - seconds) % 86400)
+        # A single key cannot tell +13 from -11; prefer offsets that exist,
+        # then the one closest to this machine's own offset.
+        candidates = [base, base - dt.timedelta(days=1)]
+        valid = [item for item in candidates if _MIN_OFFSET <= item <= _MAX_OFFSET]
+        offsets[stamp] = min(
+            valid or candidates,
+            key=lambda item: abs((item - local).total_seconds()),
+        )
+    return offsets
+
+
+def system_clock() -> Clock:
+    """Last-resort clock: the ``TZ`` variable, else this machine's zone."""
+
+    name = os.environ.get("TZ")
+    if name:
+        try:
+            return Clock(name, tz=parse_zone(name))
+        except ZoneError:
+            pass
+    local = dt.datetime.now().astimezone().tzinfo or dt.timezone.utc
+    return Clock(str(local), tz=local)
+
+
+def resolve_clock(
+    fact: Mapping[str, Any] | None = None,
+    requested: str | None = None,
+    moment: dt.datetime | None = None,
+    env: Mapping[str, str] | None = None,
+) -> Clock:
+    """Build a clock from an explicit zone, ``DTEK_TIMEZONE``, data, or system.
+
+    ``requested`` wins, then ``DTEK_TIMEZONE``.  ``"auto"`` (the default) means
+    "detect from the published data", and only when there is no data at all
+    does the machine's own timezone step in.
+    """
+
+    environment = os.environ if env is None else env
+    wanted = (requested or environment.get(DEFAULT_TIMEZONE_ENV) or "").strip()
+    if wanted and wanted.lower() not in ("auto", "detect"):
+        return Clock(wanted, tz=parse_zone(wanted))
+
+    offsets = detect_offsets(fact or {}, moment)
+    if offsets:
+        first = offsets[min(offsets)]
+        return Clock(f"{offset_label(first)} (auto)", offsets=offsets)
+    return system_clock()
+
+
+def _kyiv_clock() -> Clock:
+    try:
+        return Clock(KYIV_TIMEZONE, tz=parse_zone(KYIV_TIMEZONE))
+    except ZoneError:  # no tzdata on this machine
+        return system_clock()
+
+
+def kyiv_tz() -> dt.tzinfo | None:
+    """Kyiv timezone, or ``None`` without tzdata (compatibility helper)."""
+
+    return _kyiv_clock().tz
 
 
 def kyiv_now(now: dt.datetime | None = None) -> dt.datetime:
-    """Current time in Kyiv; schedule hours are always Kyiv local hours."""
+    """Current Kyiv time (compatibility helper; prefer :class:`Clock`)."""
 
-    moment = now or dt.datetime.now(dt.timezone.utc)
-    tz = kyiv_tz()
-    if tz is not None:
-        return moment.astimezone(tz)
-    return moment.astimezone()
+    return _kyiv_clock().now(now)
 
 
 def kyiv_date(timestamp: int | str) -> dt.date:
-    """Calendar date of a Unix timestamp in Kyiv (the site sends Kyiv midnight)."""
+    """Kyiv calendar date of a timestamp (compatibility helper)."""
 
-    tz = kyiv_tz()
-    moment = dt.datetime.fromtimestamp(int(timestamp), tz=dt.timezone.utc)
-    if tz is not None:
-        moment = moment.astimezone(tz)
-    else:
-        moment = moment.astimezone()
-    return moment.date()
+    return _kyiv_clock().date(timestamp)
 
 
 def format_date(value: dt.date) -> str:
     return value.strftime("%d.%m.%Y")
 
 
-def day_map(fact: Mapping[str, Any]) -> dict[dt.date, str]:
+def day_map(
+    fact: Mapping[str, Any], clock: Clock | None = None
+) -> dict[dt.date, str]:
     """``{date: raw_key}`` for every day present in ``fact['data']``."""
 
+    clock = clock or resolve_clock(fact)
     days: dict[dt.date, str] = {}
     for key in (fact.get("data") or {}):
         try:
-            days[kyiv_date(key)] = str(key)
+            days[clock.date(key)] = str(key)
         except (TypeError, ValueError, OSError):
             continue
     return days
 
 
-def today_key(fact: Mapping[str, Any]) -> str | None:
+def today_key(fact: Mapping[str, Any], clock: Clock | None = None) -> str | None:
     """Raw key of the day the provider calls "today"."""
 
     stamp = fact.get("today")
@@ -142,7 +311,7 @@ def today_key(fact: Mapping[str, Any]) -> str | None:
             return str(int(stamp))
         except (TypeError, ValueError):
             pass
-    days = day_map(fact)
+    days = day_map(fact, clock)
     if not days:
         return None
     first = min(days)

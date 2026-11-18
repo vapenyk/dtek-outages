@@ -149,6 +149,35 @@ class ReportTests(unittest.TestCase):
         self.assertTrue(payload["announced"])
         self.assertEqual(payload["current"]["sub_type"], None)
 
+    def test_detected_clock_is_reported(self) -> None:
+        payload = json_report(
+            city="м. Одеса",
+            street="",
+            house=House("1", ("GPV3.1",)),
+            queues=["GPV3.1"],
+            fact=fact({}),
+            preset=PRESET,
+            now=self.noon,
+        )
+        self.assertEqual(payload["source"]["timezone"], "UTC+02:00 (auto)")
+        self.assertEqual(payload["today"]["date"], "18.11.2026")
+
+    def test_explicit_clock_changes_the_dates(self) -> None:
+        page = fact({})
+        utc = json_report(
+            city="м. Одеса",
+            street="",
+            house=House("1", ("GPV3.1",)),
+            queues=["GPV3.1"],
+            fact=page,
+            preset=PRESET,
+            clock=sch.resolve_clock(page, requested="UTC"),
+            now=self.noon,
+        )
+        self.assertEqual(utc["source"]["timezone"], "UTC")
+        # The key is 2026-11-17 22:00 UTC, i.e. already the 17th in UTC.
+        self.assertEqual(utc["today"]["date"], "17.11.2026")
+
     def test_json_report_without_tomorrow(self) -> None:
         payload = json_report(
             city="м. Одеса",

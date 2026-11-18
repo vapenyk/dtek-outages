@@ -47,7 +47,9 @@ def address_label(city: str, street: str, house: str) -> str:
 
 
 def _day_context(
-    fact: Mapping[str, Any], preset: Mapping[str, Any]
+    fact: Mapping[str, Any],
+    preset: Mapping[str, Any],
+    clock: sch.Clock,
 ) -> tuple[
     dt.date | None,
     str | None,
@@ -58,14 +60,14 @@ def _day_context(
 ]:
     """Resolve today's and tomorrow's raw keys, dates and hour maps."""
 
-    key_today = sch.today_key(fact)
-    date_today = sch.kyiv_date(key_today) if key_today else None
+    key_today = sch.today_key(fact, clock)
+    date_today = clock.date(key_today) if key_today else None
 
     key_tomorrow: str | None = None
     date_tomorrow: dt.date | None = None
     if date_today is not None:
         date_tomorrow = date_today + dt.timedelta(days=1)
-        key_tomorrow = sch.day_map(fact).get(date_tomorrow)
+        key_tomorrow = sch.day_map(fact, clock).get(date_tomorrow)
 
     return (
         date_today,
@@ -86,12 +88,14 @@ def text_report(
     fact: Mapping[str, Any],
     preset: Mapping[str, Any],
     now: dt.datetime | None = None,
+    clock: sch.Clock | None = None,
     color: bool = True,
 ) -> list[str]:
     """Build the human-readable report as a list of lines."""
 
     style = Style(color)
-    moment = sch.kyiv_now(now)
+    clock = clock or sch.resolve_clock(fact, moment=now)
+    moment = clock.now(now)
     queues = [queue for queue in queues if queue]
 
     (
@@ -101,7 +105,7 @@ def text_report(
         date_tomorrow,
         key_tomorrow,
         day_tomorrow,
-    ) = _day_context(fact, preset)
+    ) = _day_context(fact, preset, clock)
 
     queue_today = sch.queue_for(day_today, queues)
     queue_tomorrow = sch.queue_for(day_tomorrow, queues)
@@ -215,10 +219,12 @@ def json_report(
     fact: Mapping[str, Any],
     preset: Mapping[str, Any],
     now: dt.datetime | None = None,
+    clock: sch.Clock | None = None,
 ) -> dict[str, Any]:
     """Same information as :func:`text_report`, shaped for scripts."""
 
-    moment = sch.kyiv_now(now)
+    clock = clock or sch.resolve_clock(fact, moment=now)
+    moment = clock.now(now)
     queues = [queue for queue in queues if queue]
 
     (
@@ -228,7 +234,7 @@ def json_report(
         date_tomorrow,
         key_tomorrow,
         day_tomorrow,
-    ) = _day_context(fact, preset)
+    ) = _day_context(fact, preset, clock)
 
     queue_today = sch.queue_for(day_today, queues)
     queue_tomorrow = sch.queue_for(day_tomorrow, queues)
@@ -243,11 +249,11 @@ def json_report(
         "queues": list(queues),
         "source": {
             "updated": fact.get("update") or None,
-            "today_key": sch.today_key(fact),
-            "timezone": sch.KYIV_TIMEZONE,
+            "today_key": sch.today_key(fact, clock),
+            "timezone": clock.name,
         },
         "now": {
-            "kyiv_time": moment.strftime("%H:%M"),
+            "local_time": moment.strftime("%H:%M"),
             "date": sch.format_date(moment.date()),
         },
         "current": {

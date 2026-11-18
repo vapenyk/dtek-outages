@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dtek-outages"
-version = "1.0.0"
+version = "1.1.0"
 description = "Unofficial DTEK Odesa outage schedule CLI with a copy-pasteable HTTP API client"
 readme = "README.md"
 requires-python = ">=3.9"

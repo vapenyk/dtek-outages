@@ -104,6 +104,87 @@ class DayTests(unittest.TestCase):
         self.assertEqual(sch.format_date(sch.kyiv_date(TODAY_TS)), "18.11.2026")
 
 
+class ClockTests(unittest.TestCase):
+    """The tool must not assume any particular timezone."""
+
+    def test_offsets_are_detected_from_day_keys(self) -> None:
+        clock = sch.resolve_clock(make_fact({}))
+        self.assertEqual(clock.name, "UTC+02:00 (auto)")
+        self.assertEqual(clock.date(TODAY_TS), dt.date(2026, 11, 18))
+        self.assertEqual(clock.offset_for(TODAY_TS), dt.timedelta(hours=2))
+
+    def test_summer_offset_is_detected(self) -> None:
+        midnight = dt.datetime(2026, 6, 30, 21, 0, tzinfo=dt.timezone.utc)
+        stamp = int(midnight.timestamp())
+        fact = {"today": stamp, "data": {str(stamp): {}}}
+        clock = sch.resolve_clock(fact)
+        self.assertEqual(clock.name, "UTC+03:00 (auto)")
+        self.assertEqual(clock.date(stamp), dt.date(2026, 7, 1))
+
+    def test_western_offset_is_detected(self) -> None:
+        midnight = dt.datetime(2026, 11, 18, 5, 0, tzinfo=dt.timezone.utc)
+        stamp = int(midnight.timestamp())
+        fact = {"today": stamp, "data": {str(stamp): {}}}
+        clock = sch.resolve_clock(fact, moment=dt.datetime(2026, 11, 18, 12, tzinfo=dt.timezone.utc))
+        self.assertEqual(clock.name, "UTC-05:00 (auto)")
+
+    def test_explicit_zone_wins(self) -> None:
+        clock = sch.resolve_clock(make_fact({}), requested="Europe/Kyiv")
+        self.assertEqual(clock.name, "Europe/Kyiv")
+        self.assertEqual(clock.offset_for(TODAY_TS), dt.timedelta(hours=2))
+
+    def test_fixed_offsets(self) -> None:
+        clock = sch.resolve_clock(requested="+03:00")
+        self.assertEqual(clock.offset_for(TODAY_TS), dt.timedelta(hours=3))
+        self.assertEqual(sch.resolve_clock(requested="UTC").offset_for(TODAY_TS), dt.timedelta(0))
+        self.assertEqual(
+            sch.resolve_clock(requested="GMT-0430").offset_for(TODAY_TS),
+            dt.timedelta(hours=-4, minutes=-30),
+        )
+
+    def test_environment_variable(self) -> None:
+        env = {sch.DEFAULT_TIMEZONE_ENV: "+04:00"}
+        self.assertEqual(sch.resolve_clock(env=env).name, "+04:00")
+        self.assertEqual(
+            sch.resolve_clock(requested="Europe/Kyiv", env=env).name, "Europe/Kyiv"
+        )
+
+    def test_auto_without_data_uses_the_system_zone(self) -> None:
+        clock = sch.resolve_clock({})
+        self.assertNotIn("(auto)", clock.name)
+        self.assertIsNotNone(clock.tz)
+
+    def test_invalid_zone_is_rejected(self) -> None:
+        with self.assertRaises(sch.ZoneError):
+            sch.resolve_clock(requested="Mars/Olympus")
+        with self.assertRaises(sch.ZoneError):
+            sch.parse_zone("+25:00")
+        with self.assertRaises(sch.ZoneError):
+            sch.parse_zone("+03:75")
+        with self.assertRaises(sch.ZoneError):
+            sch.parse_zone("Europe/Nowhere")
+
+    def test_offset_labels(self) -> None:
+        self.assertEqual(sch.offset_label(dt.timedelta(hours=2)), "UTC+02:00")
+        self.assertEqual(
+            sch.offset_label(dt.timedelta(hours=-5, minutes=-30)), "UTC-05:30"
+        )
+        self.assertEqual(sch.offset_label(dt.timedelta(0)), "UTC")
+
+    def test_now_is_expressed_in_provider_time(self) -> None:
+        clock = sch.resolve_clock(make_fact({}))
+        moment = dt.datetime(2026, 11, 18, 22, 30, tzinfo=dt.timezone.utc)
+        self.assertEqual(clock.now(moment).strftime("%H:%M"), "00:30")
+        self.assertEqual(clock.now(moment).date(), dt.date(2026, 11, 19))
+
+    def test_day_map_uses_the_given_clock(self) -> None:
+        fact = make_fact({})
+        east = sch.Clock("UTC+05:00", tz=dt.timezone(dt.timedelta(hours=5)))
+        west = sch.Clock("UTC-05:00", tz=dt.timezone(dt.timedelta(hours=-5)))
+        self.assertEqual(sch.day_map(fact, east), {dt.date(2026, 11, 18): str(TODAY_TS)})
+        self.assertEqual(sch.day_map(fact, west), {dt.date(2026, 11, 17): str(TODAY_TS)})
+
+
 class InlineJsonTests(unittest.TestCase):
     def test_parses_object_inside_html(self) -> None:
         payload = {"data": {"1": {"GPV1.1": {"1": "yes"}}}, "update": "a }; b"}
