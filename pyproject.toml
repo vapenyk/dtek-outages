@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dtek-outages"
+version = "1.0.0"
+description = "Unofficial DTEK Odesa outage schedule CLI with a copy-pasteable HTTP API client"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "vapenyk" }]
+keywords = ["dtek", "outages", "power", "odesa", "ukraine", "cli"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: POSIX",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Utilities",
+]
+dependencies = []
+
+[project.scripts]
+dtek-outages = "dtek_outages.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/vapenyk/dtek-outages"
+Source = "https://github.com/vapenyk/dtek-outages"
+Issues = "https://github.com/vapenyk/dtek-outages/issues"
+
+[tool.setuptools]
+packages = ["dtek_outages"]
